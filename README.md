@@ -1,4 +1,4 @@
-# LibreMailApi - Free email API with SMTP support
+# LibreMailApi - Mailgun-compatible API over SMTP
 
 ![LibreMailApi](assets/cover.webp)
 
