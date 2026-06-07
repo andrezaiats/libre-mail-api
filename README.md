@@ -1,5 +1,7 @@
 # LibreMailApi - Free email API with SMTP support
 
+> **Fork notice:** This is a fork of [este-linux/libre-mail-api](https://codeberg.org/este-linux/libre-mail-api) originally created by [ILS Este](https://serviziliberi.it) (Italian Linux Society - Este section). We maintain this fork to add features needed for our Ghost newsletter setup (e.g. open tracking via the Mailgun Events API).
+
 A free and open-source email API written in PHP that not only simulates email sending but can also send real emails through configurable SMTP servers. Uses Guzzle HTTP client, PHPMailer and other modern libraries to provide a Mailgun-compatible API.
 
 This idea was born when I had to send newsletters through [Ghost](https://ghost.org) and it required paying for the Mailgun service even though I had a dedicated SMTP server for newsletters.
