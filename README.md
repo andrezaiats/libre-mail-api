@@ -10,6 +10,8 @@ This idea was born when I had to send newsletters through [Ghost](https://ghost.
 
 - **Compatible API endpoints**: Implements main Mailgun endpoints for email sending
 - **Real email sending**: Supports actual email delivery through configurable SMTP servers
+- **Open tracking**: Injects a 1×1 tracking pixel per recipient with HMAC-signed tokens; records open events in SQLite and exposes them via a Mailgun-compatible Events API so Ghost can track newsletter opens
+- **Events API**: `GET /v3/{domain}/events` with filtering, cursor-based pagination, and Mailgun-compatible response format
 - **Dual mode**: Works in both simulation and real sending modes
 - **HTTP basic authentication**: Simulates Mailgun API authentication
 - **Simulated storage**: Saves messages in JSON files for later retrieval
@@ -30,7 +32,11 @@ This idea was born when I had to send newsletters through [Ghost](https://ghost.
 - `GET /v3/domains/{domain}/sending_queues` - Sending queue status
 - `DELETE /v3/{domain}/envelopes` - Delete scheduled messages
 
-### SMTP management (new endpoints)
+### Events & analytics
+- `GET /v3/{domain}/events` - Fetch events (delivered, opened) with Mailgun-compatible filtering and pagination
+- `GET /t/o/{token}` - Tracking pixel endpoint (no auth, serves 1×1 GIF and records open event)
+
+### SMTP management
 - `GET /v3/{domain}/smtp` - SMTP configuration status
 - `GET /v3/{domain}/smtp/test` - SMTP connection test
 
@@ -118,6 +124,68 @@ To enable real email sending, modify the `smtp` section in `config/config.php`:
 ]
 ```
 
+### Open tracking configuration
+
+Open tracking lets Ghost see newsletter open rates. It works by injecting a tiny invisible image into each email; when the recipient's email client loads the image, an "opened" event is recorded.
+
+Add the `tracking` section to `config/config.php` (or set via environment variables):
+
+```php
+'tracking' => [
+    'pixel_base_url' => getenv('TRACKING_PIXEL_BASE_URL') ?: 'https://yourdomain.com/t/o',
+    'hmac_secret' => getenv('TRACKING_HMAC_SECRET') ?: 'CHANGE_ME_TO_A_RANDOM_SECRET',
+],
+```
+
+- `pixel_base_url`: The public URL where the tracking pixel is served. Must be reachable from the internet.
+- `hmac_secret`: A random secret used to sign tracking tokens (prevents forged open events). Generate one with `openssl rand -hex 32`.
+
+When Ghost sends a newsletter with `o:tracking-opens=true`, LibreMailApi will:
+
+1. Create a per-recipient delivery record in SQLite
+2. Inject a `<img src="{pixel_base_url}/{signed_token}" width="1" height="1">` before `</body>` in the HTML
+3. Emit a "delivered" event after successful SMTP relay (250 response)
+4. When the pixel is loaded, validate the HMAC and record an "opened" event
+5. Serve events via `GET /v3/{domain}/events` in Mailgun format for Ghost to poll
+
+**Note:** "Delivered" events reflect SMTP relay acceptance, not inbox delivery. Downstream bounces are not tracked in this version.
+
+#### Reverse proxy setup
+
+The pixel endpoint (`/t/o/`) must be publicly accessible without authentication. Configure your reverse proxy (Nginx, NPM, etc.) to forward requests:
+
+**Nginx Proxy Manager** — add a Custom Location to your domain's proxy host:
+
+| Field | Value |
+|---|---|
+| Location | `/t/o/` |
+| Scheme | `http` |
+| Forward Hostname | `127.0.0.1` |
+| Forward Port | `8025` (or wherever LibreMailApi listens) |
+
+Advanced config for the Custom Location:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_buffering off;
+```
+
+**Plain Nginx:**
+
+```nginx
+location /t/o/ {
+    proxy_pass http://127.0.0.1:8025/t/o/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+}
+```
+
 ### Complete configuration
 
 ```php
@@ -133,6 +201,10 @@ return [
     'storage' => [
         'path' => __DIR__ . '/../storage',
         'retention_days' => 30
+    ],
+    'tracking' => [
+        'pixel_base_url' => getenv('TRACKING_PIXEL_BASE_URL') ?: 'https://yourdomain.com/t/o',
+        'hmac_secret' => getenv('TRACKING_HMAC_SECRET') ?: 'CHANGE_ME_TO_A_RANDOM_SECRET',
     ],
     'limits' => [
         'max_recipients' => 1000,
@@ -253,16 +325,21 @@ In both cases, each recipient receives an individual email. CC and BCC recipient
 ```
 libre-mail-api/
 ├── config/
-│   └── config.php          # Configuration
+│   ├── config.example.php  # Configuration template
+│   └── config.php          # Configuration (gitignored)
 ├── src/
-│   ├── LibreMailApi.php    # Main class
+│   ├── LibreMailApi.php    # Main class and router
 │   ├── MessageHandler.php  # Message handling
-│   ├── Storage.php         # Simulated storage
+│   ├── SmtpHandler.php     # SMTP sending with tracking integration
+│   ├── EventStorage.php    # SQLite event/delivery storage
+│   ├── TrackingHandler.php # Pixel injection, HMAC tokens, pixel serving
+│   ├── Storage.php         # Message file storage
 │   └── Validator.php       # Data validation
 ├── storage/                # Storage directory (auto-created)
-│   ├── messages/          # Saved messages
+│   ├── messages/          # Saved messages (JSON)
 │   ├── attachments/       # Attachments
-│   └── logs/             # Log files
+│   ├── logs/             # Log files
+│   └── events.db         # SQLite database for events and deliveries
 ├── logs/                  # Application logs
 ├── composer.json          # Dependencies
 ├── index.php             # Entry point
@@ -324,17 +401,19 @@ Logs are saved in `logs/libre-mail-api.log` and include:
 
 ### Limitations
 
-- Local storage in JSON files (not database)
+- Message storage in JSON files (events use SQLite)
 - Simplified authentication (not OAuth)
-- No integration with advanced tracking services
+- "Delivered" events reflect SMTP relay acceptance, not confirmed inbox delivery
+- Click tracking and bounce/complaint events are not yet implemented (Ghost handles click tracking natively via redirect URLs)
 
 ## Dependencies
 
-- **PHP >= 7.4**
+- **PHP >= 8.0** (with `pdo_sqlite` extension)
 - **Guzzle HTTP**: HTTP client for requests
 - **Monolog**: Advanced logging
 - **Ramsey UUID**: UUID generation for identifiers
 - **PHPMailer**: SMTP email sending
+- **SQLite 3**: Event and delivery storage (bundled with PHP)
 
 ## Docker
 
