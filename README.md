@@ -490,18 +490,6 @@ See `USAGE_EXAMPLES.md` for complete examples with:
 - JavaScript/Node.js
 - Python
 
-## Support the project
-
-This project is maintained and supported by **ILS Este** (Italian Linux Society - Este section), a local community in Veneto, Italy, that provides free and open-source services through [ServiziLiberi.it](https://serviziliberi.it) to its users.
-
-ILS Este operates entirely **without trackers, without ads, and completely free of charge**, believing in digital freedom and privacy rights for everyone. Our mission is to offer ethical alternatives to commercial services while respecting user privacy.
-
-**If this project has been useful to you, please consider supporting ILS Este's mission with a donation.** Your contribution helps maintain these free services and supports the development of new libre and open-source tools for the community.
-
-**💖 [Support ILS Este on Ko-fi](https://ko-fi.com/ilseste) 💖**
-
-Every donation, no matter how small, makes a difference in keeping these services free and accessible to everyone.
-
 ## License
 
 AGPLv3 License - See LICENSE file for details.
