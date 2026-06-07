@@ -16,11 +16,15 @@ class SmtpHandler
     private $config;
     private $logger;
     private $mailer;
+    private $eventStorage;
+    private $trackingHandler;
 
-    public function __construct(array $config, LoggerInterface $logger)
+    public function __construct(array $config, LoggerInterface $logger, $eventStorage = null, $trackingHandler = null)
     {
         $this->config = $config;
         $this->logger = $logger;
+        $this->eventStorage = $eventStorage;
+        $this->trackingHandler = $trackingHandler;
         $this->initializeMailer();
     }
 
@@ -154,6 +158,18 @@ class SmtpHandler
                     }
                 }
 
+                // Inject open-tracking pixel if enabled
+                $deliveryId = null;
+                if (!empty($message['tracking_opens']) && $this->trackingHandler && !empty($htmlBody)) {
+                    $deliveryId = $this->trackingHandler->createDelivery(
+                        $message['message_id'],
+                        $toRecipient['email'],
+                        $message['email_id'] ?? null,
+                        $message['tags_json'] ?? null
+                    );
+                    $htmlBody = $this->trackingHandler->injectTrackingPixel($htmlBody, $deliveryId);
+                }
+
                 // Set the personalized subject
                 $this->mailer->Subject = $subject;
 
@@ -212,6 +228,17 @@ class SmtpHandler
 
                 // Send the email
                 $result = $this->mailer->send();
+
+                // Emit "delivered" event on SMTP 250 acceptance
+                if ($this->eventStorage) {
+                    $this->eventStorage->storeEvent(
+                        'delivered',
+                        $toRecipient['email'],
+                        $message['message_id'],
+                        $message['email_id'] ?? null,
+                        $message['tags_json'] ?? null
+                    );
+                }
 
                 $this->logger->info("Email sent successfully via SMTP", [
                     'message_id' => $message['message_id'] ?? 'unknown',

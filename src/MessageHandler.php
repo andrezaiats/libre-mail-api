@@ -11,17 +11,21 @@ class MessageHandler
     private $logger;
     private $validator;
     private $smtpHandler;
+    private $eventStorage;
+    private $trackingHandler;
 
-    public function __construct($config, $storage, $logger)
+    public function __construct($config, $storage, $logger, $eventStorage = null, $trackingHandler = null)
     {
         $this->config = $config;
         $this->storage = $storage;
         $this->logger = $logger;
         $this->validator = new Validator($config);
+        $this->eventStorage = $eventStorage;
+        $this->trackingHandler = $trackingHandler;
 
         // Initialize SMTP handler if enabled
         if (!empty($config['smtp']['enabled'])) {
-            $this->smtpHandler = new SmtpHandler($config, $logger);
+            $this->smtpHandler = new SmtpHandler($config, $logger, $eventStorage, $trackingHandler);
         }
     }
 
@@ -296,6 +300,16 @@ class MessageHandler
         // Generate recipient-variables if not provided and we have multiple recipients
         $recipientVariables = $this->generateRecipientVariables($postData);
 
+        // Normalize tags to JSON array string
+        $rawTags = $postData['o:tag'] ?? '';
+        if (is_array($rawTags)) {
+            $tagsJson = json_encode(array_values($rawTags));
+        } elseif (is_string($rawTags) && $rawTags !== '') {
+            $tagsJson = json_encode([$rawTags]);
+        } else {
+            $tagsJson = null;
+        }
+
         $message = [
             'message_id' => $messageId,
             'domain' => $domain,
@@ -315,7 +329,11 @@ class MessageHandler
             'template' => $postData['template'] ?? '',
             'template_variables' => $postData['t:variables'] ?? '{}',
             'recipient_variables' => $recipientVariables,
-            'attachments' => $this->processAttachments($files)
+            'attachments' => $this->processAttachments($files),
+            // Tracking metadata for open tracking
+            'tracking_opens' => !empty($postData['o:tracking-opens']),
+            'email_id' => $postData['v:email-id'] ?? null,
+            'tags_json' => $tagsJson,
         ];
 
         return $message;

@@ -30,6 +30,10 @@ return [
         'testmode' => true,
         'templates' => true
     ],
+    'tracking' => [
+        'pixel_base_url' => getenv('TRACKING_PIXEL_BASE_URL') ?: 'https://yourdomain.com/t/o',
+        'hmac_secret' => getenv('TRACKING_HMAC_SECRET') ?: 'CHANGE_ME_TO_A_RANDOM_SECRET',
+    ],
     'logging' => [
         'enabled' => true,
         'level' => 'info',

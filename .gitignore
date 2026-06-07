@@ -33,6 +33,9 @@ logs/*.log
 # Storage
 storage/messages/*.json
 storage/attachments/*
+storage/events.db
+storage/events.db-wal
+storage/events.db-shm
 !storage/messages/.gitkeep
 !storage/attachments/.gitkeep
 !storage/logs/.gitkeep

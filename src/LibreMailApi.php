@@ -13,6 +13,8 @@ class LibreMailApi
     private $messageHandler;
     private $storage;
     private $validator;
+    private $eventStorage;
+    private $trackingHandler;
 
     public function __construct()
     {
@@ -39,7 +41,16 @@ class LibreMailApi
     {
         $this->storage = new Storage($this->config);
         $this->validator = new Validator($this->config);
-        $this->messageHandler = new MessageHandler($this->config, $this->storage, $this->logger);
+        $this->eventStorage = new EventStorage($this->config['storage']['path']);
+        $this->trackingHandler = new TrackingHandler(
+            $this->eventStorage,
+            $this->config['tracking']['pixel_base_url'] ?? 'https://localhost/t/o',
+            $this->config['tracking']['hmac_secret'] ?? 'default-secret'
+        );
+        $this->messageHandler = new MessageHandler(
+            $this->config, $this->storage, $this->logger,
+            $this->eventStorage, $this->trackingHandler
+        );
     }
 
     public function handleRequest()
@@ -53,6 +64,12 @@ class LibreMailApi
         $this->logger->info("Request: $method $uri");
 
         try {
+            // Tracking pixel route — no auth required
+            if ($method === 'GET' && preg_match('#^t/o/(.+)$#', $uri, $matches)) {
+                $this->trackingHandler->handlePixelRequest($matches[1]);
+                return true;
+            }
+
             // Authenticate request
             if (!$this->authenticate()) {
                 return $this->sendResponse(401, ['message' => 'Unauthorized']);
@@ -145,6 +162,8 @@ class LibreMailApi
                     return $this->messageHandler->retrieveMessage($domain, $storageKey);
                 }
                 break;
+            case 'events':
+                return $this->handleEventsRequest($domain);
             case 'sending_queues':
                 return $this->messageHandler->getQueueStatus($domain);
             case 'smtp':
@@ -159,6 +178,25 @@ class LibreMailApi
         }
 
         return ['status' => 404, 'data' => ['message' => 'Not found']];
+    }
+
+    private function handleEventsRequest($domain)
+    {
+        $params = $_GET;
+        $options = [
+            'event' => $params['event'] ?? null,
+            'tags' => $params['tags'] ?? null,
+            'begin' => isset($params['begin']) ? (float) $params['begin'] : null,
+            'end' => isset($params['end']) ? (float) $params['end'] : null,
+            'limit' => isset($params['limit']) ? (int) $params['limit'] : 300,
+            'ascending' => $params['ascending'] ?? 'yes',
+            'page' => $params['page'] ?? null,
+        ];
+
+        $baseUrl = $this->config['api']['base_url'];
+        $result = $this->eventStorage->fetch($options, $baseUrl, $domain);
+
+        return ['status' => 200, 'data' => $result];
     }
 
     private function handleDelete($domain, $endpoint, $parts)

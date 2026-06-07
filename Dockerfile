@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y \
     git \
     unzip \
     libzip-dev \
-    && docker-php-ext-install zip \
+    libsqlite3-dev \
+    && docker-php-ext-install zip pdo_sqlite \
     && rm -rf /var/lib/apt/lists/*
 
 # Installa Composer
