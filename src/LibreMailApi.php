@@ -134,14 +134,81 @@ class LibreMailApi
 
     private function handlePost($domain, $endpoint, $parts)
     {
+        $postData = $this->parsePostWithDuplicateFields();
         switch ($endpoint) {
             case 'messages':
-                return $this->messageHandler->sendMessage($domain, $_POST, $_FILES);
+                return $this->messageHandler->sendMessage($domain, $postData, $_FILES);
             case 'messages.mime':
-                return $this->messageHandler->sendMimeMessage($domain, $_POST, $_FILES);
+                return $this->messageHandler->sendMimeMessage($domain, $postData, $_FILES);
             default:
                 return ['status' => 404, 'data' => ['message' => 'Endpoint not found']];
         }
+    }
+
+    /**
+     * Parse POST data, preserving duplicate field names as arrays.
+     * PHP's $_POST discards duplicate keys (e.g. o:tag sent twice).
+     * The Mailgun API uses repeated fields for array values like o:tag.
+     */
+    private function parsePostWithDuplicateFields(): array
+    {
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+        if (strpos($contentType, 'multipart/form-data') === false) {
+            return $_POST;
+        }
+
+        // Extract boundary from content-type header
+        if (!preg_match('/boundary=(?:"([^"]+)"|([^\s;]+))/', $contentType, $m)) {
+            return $_POST;
+        }
+        $boundary = $m[1] ?: $m[2];
+
+        $raw = file_get_contents('php://input');
+        if ($raw === false || $raw === '') {
+            return $_POST;
+        }
+
+        $result = $_POST; // start with PHP's parsing
+        $counts = [];     // track which fields appear more than once
+
+        // Split by boundary and parse each part for its field name
+        $parts = explode('--' . $boundary, $raw);
+        foreach ($parts as $part) {
+            if (!preg_match('/Content-Disposition:\s*form-data;\s*name="([^"]+)"/', $part, $nm)) {
+                continue;
+            }
+            $name = $nm[1];
+            $counts[$name] = ($counts[$name] ?? 0) + 1;
+        }
+
+        // For fields that appeared multiple times, re-parse to collect all values
+        $multiFields = array_filter($counts, fn($c) => $c > 1);
+        if (empty($multiFields)) {
+            return $result;
+        }
+
+        foreach (array_keys($multiFields) as $fieldName) {
+            $values = [];
+            foreach ($parts as $part) {
+                if (!preg_match('/Content-Disposition:\s*form-data;\s*name="' . preg_quote($fieldName, '/') . '"/', $part)) {
+                    continue;
+                }
+                // Skip file uploads
+                if (strpos($part, 'filename=') !== false) {
+                    continue;
+                }
+                // Value is after the double CRLF
+                $split = preg_split('/\r?\n\r?\n/', $part, 2);
+                if (isset($split[1])) {
+                    $values[] = rtrim($split[1], "\r\n");
+                }
+            }
+            if (!empty($values)) {
+                $result[$fieldName] = $values;
+            }
+        }
+
+        return $result;
     }
 
     private function handleGet($domain, $endpoint, $parts)
