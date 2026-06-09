@@ -301,14 +301,23 @@ class MessageHandler
         $recipientVariables = $this->generateRecipientVariables($postData);
 
         // Normalize tags to JSON array string
+        // Note: PHP's $_POST discards duplicate form fields (e.g., o:tag sent twice).
+        // Ghost sends o:tag=bulk-email AND o:tag=ghost-email for newsletters, but
+        // only the last value survives. Work around by ensuring bulk-email is present
+        // when ghost-email is detected (since they always come together from Ghost).
         $rawTags = $postData['o:tag'] ?? '';
         if (is_array($rawTags)) {
-            $tagsJson = json_encode(array_values($rawTags));
+            $tags = array_values($rawTags);
         } elseif (is_string($rawTags) && $rawTags !== '') {
-            $tagsJson = json_encode([$rawTags]);
+            $tags = [$rawTags];
         } else {
-            $tagsJson = null;
+            $tags = [];
         }
+        // Ensure bulk-email tag is present when ghost-email is present (Ghost newsletter)
+        if (in_array('ghost-email', $tags, true) && !in_array('bulk-email', $tags, true)) {
+            array_unshift($tags, 'bulk-email');
+        }
+        $tagsJson = !empty($tags) ? json_encode($tags) : null;
 
         $message = [
             'message_id' => $messageId,
