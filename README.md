@@ -12,6 +12,7 @@ This idea was born when I had to send newsletters through [Ghost](https://ghost.
 
 - **Compatible API endpoints**: Implements main Mailgun endpoints for email sending
 - **Real email sending**: Supports actual email delivery through configurable SMTP servers
+- **Async background delivery**: Accepts batch requests instantly (HTTP 200 in ~15 ms) and delivers emails via a background worker process, preventing timeouts with upstream callers like Ghost's 60-second Mailgun client
 - **Open tracking**: Injects a 1×1 tracking pixel per recipient with HMAC-signed tokens; records open events in SQLite and exposes them via a Mailgun-compatible Events API so Ghost can track newsletter opens
 - **Events API**: `GET /v3/{domain}/events` with filtering, cursor-based pagination, and Mailgun-compatible response format
 - **Dual mode**: Works in both simulation and real sending modes
@@ -329,9 +330,12 @@ libre-mail-api/
 ├── config/
 │   ├── config.example.php  # Configuration template
 │   └── config.php          # Configuration (gitignored)
+├── scripts/
+│   ├── maintenance.php    # Stats, cleanup, message listing
+│   └── send-worker.php    # Background SMTP delivery worker
 ├── src/
 │   ├── LibreMailApi.php    # Main class and router
-│   ├── MessageHandler.php  # Message handling
+│   ├── MessageHandler.php  # Message handling + async dispatch
 │   ├── SmtpHandler.php     # SMTP sending with tracking integration
 │   ├── EventStorage.php    # SQLite event/delivery storage
 │   ├── TrackingHandler.php # Pixel injection, HMAC tokens, pixel serving
@@ -340,6 +344,7 @@ libre-mail-api/
 ├── storage/                # Storage directory (auto-created)
 │   ├── messages/          # Saved messages (JSON)
 │   ├── attachments/       # Attachments
+│   ├── queue/             # Pending messages for background worker
 │   ├── logs/             # Log files
 │   └── events.db         # SQLite database for events and deliveries
 ├── logs/                  # Application logs
@@ -400,6 +405,19 @@ Logs are saved in `logs/libre-mail-api.log` and include:
 - Also maintains simulation for logging and debugging
 - Supports attachments, HTML, text and custom headers
 - Handles SMTP errors without breaking the API
+
+## Architecture: async delivery
+
+When `POST /v3/{domain}/messages` is called with SMTP enabled, the API:
+
+1. Validates the request and stores the message in JSON
+2. Writes the message payload to `storage/queue/<message-id>.json`
+3. Spawns `scripts/send-worker.php` as a background process
+4. Returns HTTP 200 `{"message": "Queued. Thank you."}` immediately (~15 ms)
+
+The worker process reads the queue file, sends each recipient individually via SMTP (with recipient-variable personalization and open-tracking pixel injection), logs results to `logs/libre-mail-api.log`, and deletes the queue file.
+
+This design prevents Ghost's `MailgunClient` from hitting its hardcoded 60-second timeout when sending to large recipient lists (sequential SMTP delivery at ~3–4 s per recipient would otherwise exceed the timeout, causing Ghost to retry the entire batch and produce duplicate emails).
 
 ### Limitations
 

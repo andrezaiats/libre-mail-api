@@ -47,73 +47,28 @@ class MessageHandler
             // Store message (always store for simulation/logging purposes)
             $storageKey = $this->storage->storeMessage($message);
 
-            // Attempt to send via SMTP if enabled
-            $smtpResult = null;
+            // Dispatch SMTP sending to a background worker so we can
+            // return HTTP 200 immediately.  Ghost's MailgunClient has a
+            // 60 s timeout; sequential SMTP sends for 25+ recipients
+            // easily exceed that, causing BULK_EMAIL_DB_RETRY duplicates.
             if ($this->smtpHandler && $this->smtpHandler->isEnabled()) {
-                $smtpResult = $this->smtpHandler->sendMessage($message);
-
-                if (!$smtpResult['success']) {
-                    // Log SMTP failure but don't fail the API call (maintain Mailgun compatibility)
-                    $this->logger->warning("SMTP sending failed, message stored for simulation", [
-                        'message_id' => $messageId,
-                        'total_recipients' => $smtpResult['total_recipients'] ?? 0,
-                        'successful_sends' => $smtpResult['successful_sends'] ?? 0,
-                        'failed_sends' => $smtpResult['failed_sends'] ?? 0,
-                        'smtp_errors' => $smtpResult['errors'] ?? ['Unknown error']
-                    ]);
-                } else {
-                    $this->logger->info("SMTP sending successful for all recipients", [
-                        'message_id' => $messageId,
-                        'total_recipients' => $smtpResult['total_recipients'] ?? 0,
-                        'successful_sends' => $smtpResult['successful_sends'] ?? 0
-                    ]);
-                }
+                $this->dispatchToWorker($message, $messageId);
             }
 
-            // Log the operation
-            $logData = [
+            $this->logger->info("Message queued for background send", [
                 'domain' => $domain,
                 'message_id' => $messageId,
                 'to' => $postData['to'] ?? 'unknown',
                 'subject' => $postData['subject'] ?? 'no subject',
                 'storage_key' => $storageKey
-            ];
-
-            if ($smtpResult) {
-                $logData['smtp_enabled'] = true;
-                $logData['smtp_success'] = $smtpResult['success'];
-                $logData['total_recipients'] = $smtpResult['total_recipients'] ?? 0;
-                $logData['successful_sends'] = $smtpResult['successful_sends'] ?? 0;
-                $logData['failed_sends'] = $smtpResult['failed_sends'] ?? 0;
-                if (!$smtpResult['success']) {
-                    $logData['smtp_errors'] = $smtpResult['errors'] ?? [];
-                }
-            } else {
-                $logData['smtp_enabled'] = false;
-            }
-
-            $this->logger->info("Message processed", $logData);
-
-            // Return success response (always successful for API compatibility)
-            $responseData = [
-                'id' => $messageId,
-                'message' => 'Queued. Thank you.'
-            ];
-
-            // Add SMTP status to response if enabled (for debugging)
-            if ($this->smtpHandler && $this->smtpHandler->isEnabled()) {
-                $responseData['smtp_status'] = $smtpResult['success'] ? 'sent' : 'partial_or_failed';
-                $responseData['smtp_total_recipients'] = $smtpResult['total_recipients'] ?? 0;
-                $responseData['smtp_successful_sends'] = $smtpResult['successful_sends'] ?? 0;
-                $responseData['smtp_failed_sends'] = $smtpResult['failed_sends'] ?? 0;
-                if (!$smtpResult['success']) {
-                    $responseData['smtp_errors'] = $smtpResult['errors'] ?? ['Unknown error'];
-                }
-            }
+            ]);
 
             return [
                 'status' => 200,
-                'data' => $responseData
+                'data' => [
+                    'id' => $messageId,
+                    'message' => 'Queued. Thank you.'
+                ]
             ];
 
         } catch (\Exception $e) {
@@ -290,6 +245,37 @@ class MessageHandler
     {
         $uuid = Uuid::uuid4()->toString();
         return "<{$uuid}@{$domain}>";
+    }
+
+    /**
+     * Write the processed message to a temp JSON file and spawn a
+     * background PHP process that sends via SMTP.  This lets us return
+     * HTTP 200 to Ghost in < 1 second regardless of recipient count.
+     */
+    private function dispatchToWorker(array $message, string $messageId): void
+    {
+        $queueDir = __DIR__ . '/../storage/queue';
+        if (!is_dir($queueDir)) {
+            mkdir($queueDir, 0755, true);
+        }
+
+        $queueFile = $queueDir . '/' . $messageId . '.json';
+        file_put_contents($queueFile, json_encode(['message' => $message], JSON_UNESCAPED_UNICODE));
+
+        $workerScript = __DIR__ . '/../scripts/send-worker.php';
+        $cmd = sprintf(
+            'php %s %s >> %s 2>&1 &',
+            escapeshellarg($workerScript),
+            escapeshellarg($queueFile),
+            escapeshellarg(__DIR__ . '/../logs/send-worker.log')
+        );
+
+        exec($cmd);
+
+        $this->logger->info("Dispatched background worker", [
+            'message_id' => $messageId,
+            'queue_file' => basename($queueFile),
+        ]);
     }
 
     private function processMessage($domain, $postData, $files, $messageId)
