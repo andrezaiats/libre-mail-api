@@ -120,6 +120,12 @@ class TrackingHandler
      */
     private function servePixel(): void
     {
+        self::outputPixel();
+    }
+
+    /** Shared with the campaign open pixel (/t/co/). */
+    public static function outputPixel(): void
+    {
         http_response_code(200);
         header('Content-Type: image/gif');
         header('Content-Length: ' . strlen(self::TRANSPARENT_GIF));

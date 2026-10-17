@@ -1,0 +1,11 @@
+Hi %%first_name|there%%, still want the Daily?
+
+We haven't seen you open or click the AIpster Daily in a while. We'd rather send it only to people who actually read it.
+
+If you want to keep getting it, one click is all it takes:
+%%click:0%%
+
+If we don't hear from you, we'll stop sending the Daily. You'll still get our regular newsletter when we publish new posts.
+
+Prefer no AIpster emails at all? Unsubscribe from everything:
+%%unsubscribe_url%%

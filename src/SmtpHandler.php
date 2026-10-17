@@ -33,47 +33,7 @@ class SmtpHandler
      */
     private function initializeMailer()
     {
-        $this->mailer = new PHPMailer(true);
-
-        // Server settings
-        $this->mailer->isSMTP();
-        $this->mailer->Host = $this->config['smtp']['host'];
-        $this->mailer->Port = $this->config['smtp']['port'];
-        $this->mailer->Timeout = $this->config['smtp']['timeout'] ?? 30;
-
-        // Authentication
-        if ($this->config['smtp']['auth'] ?? false) {
-            $this->mailer->SMTPAuth = true;
-            $this->mailer->Username = $this->config['smtp']['username'];
-            $this->mailer->Password = $this->config['smtp']['password'];
-        }
-
-        // Encryption
-        $encryption = $this->config['smtp']['encryption'] ?? '';
-        if ($encryption === 'tls') {
-            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        } elseif ($encryption === 'ssl') {
-            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-        }
-
-        // SSL options
-        if (!($this->config['smtp']['verify_peer'] ?? true)) {
-            $this->mailer->SMTPOptions = [
-                'ssl' => [
-                    'verify_peer' => false,
-                    'verify_peer_name' => false,
-                    'allow_self_signed' => $this->config['smtp']['allow_self_signed'] ?? false
-                ]
-            ];
-        }
-
-        // Debug settings
-        if ($this->config['smtp']['debug'] ?? false) {
-            $this->mailer->SMTPDebug = SMTP::DEBUG_SERVER;
-            $this->mailer->Debugoutput = function($str, $level) {
-                $this->logger->debug("SMTP Debug: " . trim($str));
-            };
-        }
+        $this->mailer = MailerFactory::create($this->config['smtp'], $this->logger);
     }
 
     /**
@@ -146,9 +106,10 @@ class SmtpHandler
                 $subject = $message['subject'] ?? '';
 
                 // Apply recipient-specific variables if present
+                $vars = [];
                 if (!empty($message['recipient_variables'])) {
                     $recipientVars = json_decode($message['recipient_variables'], true);
-                    if (isset($recipientVars[$toRecipient['email']])) {
+                    if (isset($recipientVars[$toRecipient['email']]) && is_array($recipientVars[$toRecipient['email']])) {
                         $vars = $recipientVars[$toRecipient['email']];
 
                         // Replace variables in subject, HTML and text
@@ -184,32 +145,37 @@ class SmtpHandler
                     $this->mailer->Body = $textBody;
                 }
 
-                // Add custom headers
+                // Add custom headers, personalized per recipient (Ghost's
+                // List-Unsubscribe carries %recipient.list_unsubscribe%)
+                $pairs = [];
                 if (!empty($message['headers']) && is_array($message['headers'])) {
                     foreach ($message['headers'] as $header) {
                         if (is_array($header) && count($header) >= 2) {
-                            // Headers are in format [['name', 'value'], ...]
-                            $name = $header[0];
-                            $value = $header[1];
-
-                            // Skip standard headers that PHPMailer handles automatically
-                            $skipHeaders = ['mime-version', 'subject', 'from', 'to', 'content-transfer-encoding'];
-                            if (!in_array(strtolower($name), $skipHeaders)) {
-                                $this->mailer->addCustomHeader($name, $value);
-                            }
+                            $pairs[] = [(string) $header[0], (string) $header[1]];
                         } elseif (is_string($header)) {
-                            // Handle string headers in format "Name: Value"
                             $parts = explode(':', $header, 2);
                             if (count($parts) === 2) {
-                                $name = trim($parts[0]);
-                                $value = trim($parts[1]);
-                                $skipHeaders = ['mime-version', 'subject', 'from', 'to', 'content-transfer-encoding'];
-                                if (!in_array(strtolower($name), $skipHeaders)) {
-                                    $this->mailer->addCustomHeader($name, $value);
-                                }
+                                $pairs[] = [trim($parts[0]), trim($parts[1])];
                             }
                         }
                     }
+                }
+                // Skip standard headers that PHPMailer handles automatically
+                $skipHeaders = ['mime-version', 'subject', 'from', 'to', 'content-transfer-encoding'];
+                $pairs = array_values(array_filter($pairs, function ($p) use ($skipHeaders) {
+                    return !in_array(strtolower($p[0]), $skipHeaders, true);
+                }));
+                $hasFeedbackId = false;
+                foreach (HeaderBuilder::personalizeHeaders($pairs, $vars) as [$name, $value]) {
+                    $hasFeedbackId = $hasFeedbackId || strtolower($name) === 'feedback-id';
+                    $this->mailer->addCustomHeader($name, $value);
+                }
+                if (!$hasFeedbackId && $this->isGhostNewsletter($message)) {
+                    $this->mailer->addCustomHeader('Feedback-ID', HeaderBuilder::feedbackId(
+                        'newsletter',
+                        'all',
+                        $this->config['campaigns']['feedback_sender'] ?? 'aipster'
+                    ));
                 }
 
                 // Add attachments
@@ -274,8 +240,13 @@ class SmtpHandler
                     'error' => $e->getMessage(),
                     'smtp_error' => $this->mailer->ErrorInfo
                 ];
+
+                // Keep-alive connection: clear the aborted transaction before the next recipient
+                MailerFactory::recover($this->mailer);
             }
         }
+
+        $this->mailer->smtpClose();
 
         // Return overall result
         return [
@@ -361,8 +332,11 @@ class SmtpHandler
                     'error' => $e->getMessage(),
                     'smtp_error' => $this->mailer->ErrorInfo
                 ];
+                MailerFactory::recover($this->mailer);
             }
         }
+
+        $this->mailer->smtpClose();
 
         // Return overall result
         return [
@@ -474,6 +448,12 @@ class SmtpHandler
         }
 
         return $content;
+    }
+
+    private function isGhostNewsletter(array $message): bool
+    {
+        $tags = json_decode($message['tags_json'] ?? '[]', true);
+        return is_array($tags) && in_array('ghost-email', $tags, true);
     }
 
     /**

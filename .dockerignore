@@ -30,9 +30,8 @@ logs/*
 storage/*
 !storage/.gitkeep
 
-# Test files
+# Test files (tests/ is shipped: `php tests/run.php` runs inside the container)
 test_simple.php
-tests/
 examples/
 
 

@@ -15,6 +15,7 @@ class LibreMailApi
     private $validator;
     private $eventStorage;
     private $trackingHandler;
+    private ?Campaign\Factory $campaignFactory = null;
 
     public function __construct()
     {
@@ -70,6 +71,14 @@ class LibreMailApi
                 return true;
             }
 
+            // Campaign open/click/unsubscribe routes — no auth required
+            if (preg_match('#^t/(co|c|u)/#', $uri)) {
+                if ($this->campaigns()->publicEndpoints()->handle($method, $uri, $_SERVER, $_POST)) {
+                    return true;
+                }
+                return $this->sendResponse(404, ['message' => 'Not found']);
+            }
+
             // Authenticate request
             if (!$this->authenticate()) {
                 return $this->sendResponse(401, ['message' => 'Unauthorized']);
@@ -95,8 +104,55 @@ class LibreMailApi
                $_SERVER['PHP_AUTH_PW'] === $this->config['api']['auth']['password'];
     }
 
+    private function campaigns(): Campaign\Factory
+    {
+        if ($this->campaignFactory === null) {
+            $this->campaignFactory = new Campaign\Factory($this->config, $this->logger);
+        }
+        return $this->campaignFactory;
+    }
+
+    /**
+     * Daily/re-engagement campaign API (JSON):
+     *   POST v3/campaigns               create (or dry_run / test_to)
+     *   GET  v3/campaigns/{key}         status
+     *   POST v3/campaigns/{key}/resume  reclaim expired leases and restart workers
+     */
+    private function routeCampaigns(string $method, string $uri): ?array
+    {
+        if (!preg_match('#^v3/campaigns(?:/([^/]+))?(/resume)?/?$#', $uri, $m)) {
+            return null;
+        }
+        $key = isset($m[1]) && $m[1] !== '' ? rawurldecode($m[1]) : null;
+        $resume = !empty($m[2]);
+        try {
+            if ($key === null && $method === 'POST') {
+                $body = json_decode((string) file_get_contents('php://input'), true);
+                if (!is_array($body)) {
+                    return ['status' => 400, 'data' => ['message' => 'Body must be a JSON object']];
+                }
+                return $this->campaigns()->service()->create($body);
+            }
+            if ($key !== null && $resume && $method === 'POST') {
+                return $this->campaigns()->service()->resume($key);
+            }
+            if ($key !== null && !$resume && $method === 'GET') {
+                return $this->campaigns()->service()->status($key);
+            }
+            return ['status' => 405, 'data' => ['message' => 'Method not allowed']];
+        } catch (\Throwable $e) {
+            $this->logger->error('campaign API error', ['uri' => $uri, 'error' => $e->getMessage()]);
+            return ['status' => 500, 'data' => ['message' => 'Internal server error']];
+        }
+    }
+
     private function route($method, $uri)
     {
+        $campaign = $this->routeCampaigns($method, $uri);
+        if ($campaign !== null) {
+            return $campaign;
+        }
+
         // Parse URI patterns:
         // v3/{domain}/messages
         // v3/domains/{domain}/messages/{storage_key}

@@ -40,6 +40,44 @@ return [
         'file' => __DIR__ . '/../logs/libre-mail-api.log'
     ],
 
+    // Campaign sender (POST /v3/campaigns): MySQL schema for campaigns/events,
+    // plus read access to the Ghost schema (members, newsletters, settings).
+    // The databases must exist; the app only creates tables.
+    'mysql' => [
+        'host' => getenv('MAIL_DB_HOST') ?: '127.0.0.1',
+        'port' => (int) (getenv('MAIL_DB_PORT') ?: 3306),
+        'user' => getenv('MAIL_DB_USER') ?: 'ghost',
+        'password' => getenv('MAIL_DB_PASSWORD') ?: '',
+        'ghost_db' => getenv('GHOST_DB_NAME') ?: 'ghost',
+        'mail_db' => getenv('MAIL_DB_NAME') ?: 'aipster_mail',
+    ],
+    'site' => [
+        'public_url' => getenv('SITE_PUBLIC_URL') ?: 'https://yourdomain.com',
+        'ghost_internal_url' => getenv('GHOST_INTERNAL_URL') ?: 'http://127.0.0.1:2368',
+    ],
+    'campaigns' => [
+        'workers' => (int) (getenv('CAMPAIGN_WORKERS') ?: 4),
+        'chunk' => 50,
+        'newsletter_slug' => 'default-newsletter',
+        'from' => 'Your Site <noreply@yourdomain.com>',
+        'feedback_sender' => 'yoursite',
+        'suspect_click_seconds' => 10,
+        'timezone' => 'UTC',
+        'trusted_proxy_cidrs' => getenv('TRUSTED_PROXY_CIDRS') ?: '127.0.0.1/32',
+        'max_html_bytes' => 2 * 1024 * 1024,
+        'lease_seconds' => 600,
+        'max_test_recipients' => 20,
+    ],
+    'sunset' => [
+        'active_days' => 30,
+        'warm_days' => 90,
+        'cold_days' => 180,
+        'min_sends_before_cooling' => 10,
+        'reengage_interval_days' => 14,
+        'weekly_day' => 1, // ISO-8601, 1 = Monday
+        'pii_retention_days' => 180,
+    ],
+
     // SMTP Configuration for actual email sending
     'smtp' => [
         // Set to true to actually send emails via SMTP

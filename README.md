@@ -323,6 +323,56 @@ In both cases, each recipient receives an individual email. CC and BCC recipient
 - `h:X-Custom-Header`: Custom headers
 - `v:custom-data`: Custom data
 
+Headers are personalized per recipient: `%recipient.key%` in any `h:` value is replaced
+from `recipient-variables` (Ghost's `List-Unsubscribe: <%recipient.list_unsubscribe%>`).
+Variables that cannot be resolved (e.g. Mailgun's `%tag_unsubscribe_email%`) are dropped,
+and `List-Unsubscribe-Post` is only kept when an https unsubscribe URI remains. Ghost
+newsletters (`o:tag=ghost-email`) get `Feedback-ID: newsletter:all:bulk:<sender>`.
+
+## Campaign API (Daily News)
+
+A second, JSON-based API sends one HTML campaign to every subscriber of a Ghost
+newsletter, with per-recipient unsubscribe/tracking, engagement-ordered delivery and a
+soft sunset policy. It needs MySQL (`mysql` section of `config.php`): campaign tables
+live in `mail_db`; members are read from the Ghost schema `ghost_db`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v3/campaigns` | Create and send (or `dry_run`, or `test_to`) |
+| GET | `/v3/campaigns/{key}` | Delivery and event counts |
+| POST | `/v3/campaigns/{key}/resume` | Requeue expired leases, restart workers |
+| GET | `/t/co/{token}` | Open pixel (public) |
+| GET | `/t/c/{token}` | Click redirect, only to links stored for the campaign (public) |
+| GET/POST | `/t/u/{token}` | Unsubscribe page and RFC 8058 one-click (public) |
+
+```bash
+curl -u api:KEY -H 'Content-Type: application/json' http://localhost:8025/v3/campaigns -d '{
+  "campaign_key": "daily-2026-10-17",
+  "subject": "AI news for %%first_name|you%%",
+  "preheader": "Top stories today",
+  "html": "<html><body>Hi %%first_name|there%% ... <a href=\"%%unsubscribe_url%%\">Unsubscribe</a></body></html>",
+  "test_to": ["me+test@example.com"],
+  "dry_run": false
+}'
+```
+
+- `campaign_key` is unique: a repeated POST returns `409` and sends nothing.
+- Placeholders: `%%name%%`, `%%first_name%%`, `%%email%%`, `%%unsubscribe_url%%` (required in
+  `html`), each with an optional `|fallback`. `{{ }}` is avoided on purpose (n8n expressions).
+- Every `http(s)` link is rewritten to a tracked `/t/c/` URL; add `data-no-track` to opt out.
+  If `text` is omitted, a plain-text part is generated from the HTML.
+- `test_to` sends only to those addresses (key gets a `:test:<unix>` suffix, excluded from
+  engagement). `dry_run` returns the audience size per tier without writing anything.
+- Unsubscribing calls Ghost's `POST /unsubscribe/?uuid=..&key=..` without a newsletter,
+  which removes the member from all newsletters.
+- Workers: `CAMPAIGN_WORKERS` processes, one kept-alive SMTP connection each. A message
+  whose worker died after handing it to SMTP is marked `unknown` and never resent.
+- Engagement tiers and sunset: `sunset` section of `config.php` (active/warm/cold days,
+  weekly day for cold members, 2 re-engagement emails, then suppression from campaigns only).
+
+Run the tests inside the container: `php tests/run.php` (integration tests use
+`MAIL_TEST_DB_NAME`, default `aipster_mail_test`, and never send email).
+
 ## Project structure
 
 ```
