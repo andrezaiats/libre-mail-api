@@ -117,6 +117,25 @@ class EngagementPolicy
         return $weeklyDay;
     }
 
+    /**
+     * Ghost post newsletters: everyone but dormant members (in the re-engagement
+     * track) and suppressed ones. Cold still receives every post, last in line.
+     */
+    public function includeInPost(string $tier, string $stage): bool
+    {
+        return $stage !== 'suppressed' && $tier !== 'dormant';
+    }
+
+    /**
+     * Shared send order: tier, then most recent engagement first, then email.
+     * Rows need 'tier', 'engaged_at' (DateTimeImmutable) and 'email'.
+     */
+    public static function compareForSend(array $a, array $b): int
+    {
+        return [self::tierRank($a['tier']), -$a['engaged_at']->getTimestamp(), $a['email']]
+            <=> [self::tierRank($b['tier']), -$b['engaged_at']->getTimestamp(), $b['email']];
+    }
+
     public static function tierRank(string $tier): int
     {
         $i = array_search($tier, self::TIERS, true);

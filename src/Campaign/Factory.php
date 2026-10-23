@@ -65,6 +65,30 @@ class Factory
         );
     }
 
+    /**
+     * Ranker for the Ghost post newsletter send path. Lazy and read-only: no
+     * schema creation, so the send worker never depends on migrations.
+     */
+    public function postRanker(): PostRanker
+    {
+        $root = dirname(__DIR__, 2);
+        $service = new CampaignService(
+            $this->db(),
+            $this->policy(),
+            $this->campaignsConfig(),
+            $root . '/templates',
+            function (int $campaignId, int $workers): void {
+            },
+            $this->logger
+        );
+        return new PostRanker(
+            fn (\DateTimeImmutable $now) => $service->rankAudience($now),
+            $this->policy(),
+            $this->logger,
+            (bool) ($this->config['sunset']['post_ranking'] ?? true)
+        );
+    }
+
     public function publicEndpoints(): PublicEndpoints
     {
         $site = $this->config['site'] ?? [];

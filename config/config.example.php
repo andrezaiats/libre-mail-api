@@ -76,6 +76,9 @@ return [
         'reengage_interval_days' => 14,
         'weekly_day' => 1, // ISO-8601, 1 = Monday
         'pii_retention_days' => 180,
+        // Ghost post newsletters: send active > warm > cold, skip dormant/suppressed.
+        // Kill switch: POST_RANKING=0
+        'post_ranking' => getenv('POST_RANKING') !== '0',
     ],
 
     // SMTP Configuration for actual email sending

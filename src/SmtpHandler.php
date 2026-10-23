@@ -173,7 +173,7 @@ class SmtpHandler
                 if (!$hasFeedbackId && $this->isGhostNewsletter($message)) {
                     $this->mailer->addCustomHeader('Feedback-ID', HeaderBuilder::feedbackId(
                         'newsletter',
-                        'all',
+                        $message['recipient_tiers'][strtolower($toRecipient['email'])] ?? 'all',
                         $this->config['campaigns']['feedback_sender'] ?? 'aipster'
                     ));
                 }

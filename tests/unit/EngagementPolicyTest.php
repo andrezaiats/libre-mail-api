@@ -70,3 +70,24 @@ test('cold/dormant get the Daily only on Monday (America/Sao_Paulo)', function (
     assertTrue($policy->includeInDaily('warm', 'none', false));
     assertTrue(!$policy->includeInDaily('active', 'suppressed', true), 'suppressed never gets the Daily');
 });
+
+test('includeInPost drops dormant and suppressed, keeps cold last', function () use ($policy) {
+    assertTrue($policy->includeInPost('active', 'none'));
+    assertTrue($policy->includeInPost('warm', 'none'));
+    assertTrue($policy->includeInPost('cold', 'none'), 'cold still receives posts');
+    assertTrue(!$policy->includeInPost('dormant', 'none'));
+    assertTrue(!$policy->includeInPost('dormant', 'reengage1'));
+    assertTrue(!$policy->includeInPost('warm', 'suppressed'));
+});
+
+test('compareForSend orders by tier, then newest engagement, then email', function () use ($now, $daysAgo) {
+    $rows = [
+        ['tier' => 'cold', 'engaged_at' => $daysAgo(100), 'email' => 'c@x.com'],
+        ['tier' => 'active', 'engaged_at' => $daysAgo(10), 'email' => 'b@x.com'],
+        ['tier' => 'active', 'engaged_at' => $daysAgo(2), 'email' => 'z@x.com'],
+        ['tier' => 'warm', 'engaged_at' => $daysAgo(50), 'email' => 'w@x.com'],
+        ['tier' => 'active', 'engaged_at' => $daysAgo(10), 'email' => 'a@x.com'],
+    ];
+    usort($rows, [EngagementPolicy::class, 'compareForSend']);
+    assertSame(['z@x.com', 'a@x.com', 'b@x.com', 'w@x.com', 'c@x.com'], array_column($rows, 'email'));
+});

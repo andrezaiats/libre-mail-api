@@ -62,6 +62,27 @@ try {
         $config['tracking']['hmac_secret']    ?? 'default-secret'
     );
 
+    // Engagement order for Ghost post newsletters (fails open, see PostRanker)
+    try {
+        $factory = new \LibreMailApi\Campaign\Factory($config, $logger);
+        $message = $factory->postRanker()->apply($message);
+    } catch (\Throwable $e) {
+        $logger->error("post ranking unavailable, sending in Ghost order", ['message_id' => $messageId, 'error' => $e->getMessage()]);
+    }
+    if (isset($message['ranking_skipped'])) {
+        $logger->info("post ranking applied", [
+            'message_id' => $messageId,
+            'skipped'    => $message['ranking_skipped'],
+            'tiers'      => $message['ranking_tiers'] ?? [],
+            'order'      => $message['recipients'] ?? [],
+        ]);
+        if (empty($message['recipients'])) {
+            $logger->info("send-worker: all recipients skipped, nothing to send", ['message_id' => $messageId]);
+            @unlink($queueFile);
+            exit(0);
+        }
+    }
+
     $smtp   = new SmtpHandler($config, $logger, $eventStorage, $trackingHandler);
     $result = $smtp->sendMessage($message);
 

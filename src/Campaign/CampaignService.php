@@ -261,14 +261,31 @@ class CampaignService
             }
         }
 
-        $order = function (array $a, array $b): int {
-            return [EngagementPolicy::tierRank($a['tier']), -$a['engaged_at']->getTimestamp(), $a['email']]
-                <=> [EngagementPolicy::tierRank($b['tier']), -$b['engaged_at']->getTimestamp(), $b['email']];
-        };
-        usort($daily, $order);
-        usort($reengage, $order);
+        usort($daily, [EngagementPolicy::class, 'compareForSend']);
+        usort($reengage, [EngagementPolicy::class, 'compareForSend']);
 
         return ['daily' => $daily, 'reengage' => $reengage, 'states' => $newStates, 'tick_applied' => $applyTick && $tickDue];
+    }
+
+    /**
+     * Read-only ranking of the whole audience (no sunset tick, no writes) for
+     * Ghost post newsletters.
+     *
+     * @return array<string, array{email: string, tier: string, stage: string, engaged_at: \DateTimeImmutable}> keyed by lowercase email
+     */
+    public function rankAudience(\DateTimeImmutable $now): array
+    {
+        $states = $this->loadStates();
+        $out = [];
+        foreach ($this->loadAudience() as $m) {
+            $out[$m['email']] = [
+                'email' => $m['email'],
+                'tier' => $this->policy->tier($now, $m['engaged_at'], $m['sends_since']),
+                'stage' => ($states[$m['id']] ?? ['sunset_stage' => 'none'])['sunset_stage'],
+                'engaged_at' => $m['engaged_at'],
+            ];
+        }
+        return $out;
     }
 
     /** @return array<int, array{id: string, uuid: string, email: string, name: ?string, engaged_at: \DateTimeImmutable, sends_since: int}> */
@@ -297,7 +314,7 @@ class CampaignService
             )
             SELECT a.id, a.uuid, a.email, a.name, eng.engaged_at,
                 (SELECT COUNT(*) FROM {$g}.email_recipients er
-                  WHERE er.member_id = a.id AND COALESCE(er.delivered_at, er.processed_at) > eng.engaged_at)
+                  WHERE er.member_id = a.id AND er.delivered_at > eng.engaged_at)
               + (SELECT COUNT(*) FROM deliveries d JOIN campaigns c ON c.id = d.campaign_id
                   WHERE d.member_id = a.id AND d.status = 'sent' AND c.kind <> 'test' AND d.sent_at > eng.engaged_at)
                 AS sends_since
